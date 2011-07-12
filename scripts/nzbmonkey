@@ -15,20 +15,33 @@ class Commands(object):
         self._loader = loader
 
     def do(self, name, args):
+        """
+            execute the given action
+        """
         if hasattr(self, name):
             getattr(self, name)(*args)
 
-    def catchup(self, delta = 400000):
+    def catchup(self, group = None, delta = 400000):
+        """
+            catchup with the given `group` or all groups specified in the
+            config file, if no history exists for a grep, `delta` is used
+        """
         for group in self._loader.groups:
             loader.catchup(group, int(delta))
 
-    def listgroups(self, pattern):
+    def list(self, pattern):
+        """
+            list groups matching `pattern`
+        """
         (response, descs) = self._server.descriptions(pattern)
         for name, title in descs:
             print "%s - %s" % (name, title)
 
     def download(self, group, filename, delta = 1000):
-        # select group
+        """
+            fetch `delta` articles from `group` and persist them into
+            `filename` with the shelve module
+        """
         resp, count, first, last, name = self._loader.server.group(group)
 
         s = shelve.open(filename)
@@ -60,6 +73,10 @@ class Commands(object):
         s.close()
 
     def nzbs(self, filename, dest_dir):
+        """
+            create nzb files from the articles shelved in `filename`
+            and write the resulting nzbs to `dest_dir`
+        """
         store = shelve.open(filename)
 
         nzbs = nzbmonkey.process(store.values())
@@ -91,6 +108,7 @@ if __name__ == "__main__":
 
     (options, args) = optparser.parse_args()
 
+    # if no config file was specified, use defaults
     if not options.config:
         options.config =  ["/etc/nzbmonkey.conf", "~/.nzbmonkey.conf"]
 
