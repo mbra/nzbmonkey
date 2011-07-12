@@ -12,6 +12,7 @@ import subprocess
 import shelve
 import xml.sax.saxutils
 
+
 class ObjectInterpolator(object):
 
     _MODIFIERS = {
@@ -20,8 +21,9 @@ class ObjectInterpolator(object):
         None: lambda x: x,
     }
 
-    def __init__(self, obj):
+    def __init__(self, obj, modifiers = None):
         self._obj = obj
+        self.modifiers = modifiers or self._MODIFIERS
 
     def __getitem__(self, key):
         modifier = None
@@ -215,26 +217,10 @@ class NZBFile(NZBGenericCollection):
     _LEN_EXCEPTION_STRING = "Segment missing in '%(subject)s', is: %(length)s should be: %(segment_count)s"
     _LEN_EXCEPTION = NZBSegmentMissing
 
+
 class NZBSegment(NZBGenericCollection):
 
     _XML_TEMPLATE = '      <segment bytes=%(size:quote)s number=%(segment_number:quote)s>%(messageid:escape)s</segment>'
-
-
-    _SUBJECT_RE = re.compile(
-        r"""
-            (?P<title>.*?)
-            [[(](?P<part_number>\d+)/(?P<part_count>\d+)[])]
-            \s+\-\s+(yEnc\s+)?
-            "
-                (?P<name>[^"]+?)
-                \.?(?P<opt>sample|part\d+|vol\d+|vol\d+\+\d+)?
-                \.(?P<type>nfo|avi|rar|nzb|par2|r\d+)
-            "
-            \s+(yEnc\s+)?
-            \((?P<segment_number>\d+)/(?P<segment_count>\d+)\)
-        """,
-        re.I|re.X,
-    )
 
 
 class Loader(object):
@@ -300,13 +286,11 @@ class Loader(object):
             dict()
         )[key] = value
 
-
     def __del__(self):
         self._server.quit()
 
     def store_pickled(self):
         pickle.dump(self._state, file(self._state_file, "wb"))
-
 
     def fetch_body(self, aid):
         try:
@@ -384,6 +368,23 @@ class Loader(object):
             group,
             dict()
         )["last_aid"] = int(last)
+
+
+_SUBJECT_RE = re.compile(
+    r"""
+        (?P<title>.*?)
+        [[(](?P<part_number>\d+)/(?P<part_count>\d+)[])]
+        \s+\-\s+(yEnc\s+)?
+        "
+            (?P<name>[^"]+?)
+            \.?(?P<opt>sample|part\d+|vol\d+|vol\d+\+\d+)?
+            \.(?P<type>nfo|avi|rar|nzb|par2|r\d+)
+        "
+        \s+(yEnc\s+)?
+        \((?P<segment_number>\d+)/(?P<segment_count>\d+)\)
+    """,
+    re.I|re.X,
+)
 
 
 def process(article_provider, index = None, regex = _SUBJECT_RE):
