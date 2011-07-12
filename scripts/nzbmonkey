@@ -1,0 +1,110 @@
+#!/usr/bin/env python
+
+import os
+import re
+import sys
+import shelve
+import nzbmonkey
+import ConfigParser
+
+class Commands(object):
+
+    def __init__(self, loader):
+        self._loader = loader
+
+    def do(self, name, args):
+        if hasattr(self, name):
+            getattr(self, name)(*args)
+
+    def catchup(self, delta = 400000):
+        for group in self._loader.groups:
+            loader.catchup(group, int(delta))
+
+    def listgroups(self, pattern):
+        (response, descs) = self._server.descriptions(pattern)
+        for name, title in descs:
+            print "%s - %s" % (name, title)
+
+    def download(self, group, filename, delta = 1000):
+        # select group
+        resp, count, first, last, name = self._loader.server.group(group)
+
+        s = shelve.open(filename)
+        start_aid = int(last) - int(delta)
+        # get last fetched aid from pickle or use a default
+        print "xover group: %s start: %s end: %s delta: %s" % (
+            group,
+            start_aid,
+            last,
+            int(last) - int(start_aid),
+        )
+        # get article range
+        (resp, msgs) = self._loader.server.xover(str(start_aid), last)
+
+        # only use nzb posts via naive pattern match
+        for (aid, subject, poster, date, mid, references, size, lines) in msgs:
+            s[aid] = dict(
+                aid = aid,
+                subject = subject,
+                poster = poster,
+                date = date,
+                mid = mid,
+                references = references,
+                size = size,
+                lines = lines,
+                group = group,
+            )
+
+        s.close()
+
+
+    def make_nzbs(self, filename, dest_dir):
+        store = shelve.open(filename)
+
+        index = nzbmonkey.process(store.values())
+        good = nzbmonkey.NZBIndex()
+
+        for nzb in index:
+            try:
+                nzb.verify()
+                good.append(nzb)
+            except (nzbmonkey.NZBVerificationException), e:
+                sys.stderr.write(str(e) + "\n")
+
+        del index
+
+        for nzb in good:
+            print nzb.name
+
+        for nzb in good:
+            with file("%s/%s.nzb" % (dest_dir, nzb.name), "w") as fp:
+                print "writing %s" % (fp.name)
+                fp.write(nzb.xml())
+
+
+config = ConfigParser.ConfigParser()
+config.read([
+    "/etc/nzbmonkey.conf",
+    os.path.expanduser("~/.nzbmonkey.conf"),
+])
+
+loader = nzbmonkey.Loader(
+    host = config.get("nzbmonkey", "host"),
+    port = config.get("nzbmonkey", "port"),
+    user = config.get("nzbmonkey", "user"),
+    password = config.get("nzbmonkey", "password"),
+    state = config.get("nzbmonkey", "state"),
+    groups = re.split("\s+", config.get("nzbmonkey", "groups")),
+)
+
+commands = Commands(loader)
+command = "catchup"
+
+if len(sys.argv) > 1:
+    command = sys.argv[1]
+
+args = []
+if len(sys.argv) > 2:
+    args = sys.argv[2:]
+
+commands.do(command, args)
