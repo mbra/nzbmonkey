@@ -4,8 +4,10 @@ import os
 import re
 import sys
 import shelve
-import nzbmonkey
+import optparse
 import ConfigParser
+
+import nzbmonkey
 
 class Commands(object):
 
@@ -57,7 +59,6 @@ class Commands(object):
 
         s.close()
 
-
     def make_nzbs(self, filename, dest_dir):
         store = shelve.open(filename)
 
@@ -82,29 +83,46 @@ class Commands(object):
                 fp.write(nzb.xml())
 
 
-config = ConfigParser.ConfigParser()
-config.read([
-    "/etc/nzbmonkey.conf",
-    os.path.expanduser("~/.nzbmonkey.conf"),
-])
 
-loader = nzbmonkey.Loader(
-    host = config.get("nzbmonkey", "host"),
-    port = config.get("nzbmonkey", "port"),
-    user = config.get("nzbmonkey", "user"),
-    password = config.get("nzbmonkey", "password"),
-    state = config.get("nzbmonkey", "state"),
-    groups = re.split("\s+", config.get("nzbmonkey", "groups")),
-)
+if __name__ == "__main__":
+    optparser = optparse.OptionParser()
 
-commands = Commands(loader)
-command = "catchup"
+    optparser.add_option(
+        "-c",
+        "--config",
+        type = "string",
+        action = "append",
+        default = [],
+    )
 
-if len(sys.argv) > 1:
-    command = sys.argv[1]
+    (options, args) = optparser.parse_args()
 
-args = []
-if len(sys.argv) > 2:
-    args = sys.argv[2:]
+    if not options.config:
+        options.config =  ["/etc/nzbmonkey.conf", "~/.nzbmonkey.conf"]
 
-commands.do(command, args)
+    config = ConfigParser.ConfigParser()
+    config.read([os.path.expanduser(x) for x in options.config])
+
+    try:
+        loader = nzbmonkey.Loader(
+            host = config.get("nzbmonkey", "host"),
+            port = config.get("nzbmonkey", "port"),
+            user = config.get("nzbmonkey", "user"),
+            password = config.get("nzbmonkey", "password"),
+            state = config.get("nzbmonkey", "state"),
+            groups = re.split("\s+", config.get("nzbmonkey", "groups")),
+        )
+    except (ConfigParser.NoSectionError, ConfigParser.NoOptionError), e:
+        sys.stderr.write("A mandatory config option is missing: %s\n" % e.message)
+        sys.exit(1)
+
+    commands = Commands(loader)
+
+    command = "catchup"
+
+    try:
+        command = args.pop(0)
+    except IndexError:
+        pass
+
+    commands.do(command, args)
