@@ -86,14 +86,42 @@ class NZBGenericCollection(collections.MutableSequence):
 
     def find(self, key, value):
         for item in self:
-            if getattr(item, key) == value:
+            if self.check(item, key, value):
                 yield item
+
+    def check(self, item, key, value):
+        return getattr(item, key) == value
 
     def findone(self, *args, **kwargs):
         for item in self.find(*args, **kwargs):
             return item
 
         return None
+
+    def split(self, key, value, good = None, bad = None):
+        if good is None:
+            good = NZBIndex()
+
+        if bad is None:
+            bad = NZBIndex()
+
+        for item in self:
+            if self.check(item, key, value):
+                good.append(item)
+            else:
+                bad.append(item)
+
+        return (good, bad)
+
+    @property
+    def complete(self):
+        try:
+            self.verify()
+            return True
+        except NZBVerificationException:
+            pass
+
+        return False
 
     @property
     def timestamp(self):
@@ -144,11 +172,19 @@ class NZBGenericCollection(collections.MutableSequence):
         for item in self:
             item.verify()
 
+    @property
+    def nzb_filename(self):
+        return "%s.nzb" % self.name
+
 
 class NZBIndex(NZBGenericCollection):
 
     def xml(self):
-        return "\n=======================================================================================\n".join([x.xml() for x in self])
+        for nzb in self:
+            yield (
+                nzb.nzb_filename,
+                nzb.xml(),
+            )
 
 
 class NZB(NZBGenericCollection):
