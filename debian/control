@@ -1,0 +1,16 @@
+Source: nzbmonkey
+Section: news
+Priority: extra
+Maintainer: Michael van Bracht <michael@wontfix.org>
+Build-Depends: debhelper (>= 7.0.50~), python (>= 2.5), python-support (>= 1), debhelper(>= 8)
+Standards-Version: 3.9.1
+Homepage: http://wontfix.org/projects/nzbmonkey/
+Vcs-Git: git://github.com/mbra/nzbmonkey.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/nzbmonkey.git;a=summary
+
+Package: nzbmonkey
+Architecture: all
+Depends: ${misc:Depends}, ${python:Depends}, yydecode
+Description: Assemble nzb files from usenet articles
+ Create nzb files from articles posted in usenet groups.
+ Groups files according to usenet binary posting convention
