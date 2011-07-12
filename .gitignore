@@ -1,0 +1,7 @@
+/generated-nzbs/
+/lib/
+/bin/
+/include/
+*.pyc
+*.swp
+*.swo
