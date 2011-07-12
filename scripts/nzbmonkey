@@ -59,27 +59,21 @@ class Commands(object):
 
         s.close()
 
-    def make_nzbs(self, filename, dest_dir):
+    def nzbs(self, filename, dest_dir):
         store = shelve.open(filename)
 
-        index = nzbmonkey.process(store.values())
-        good = nzbmonkey.NZBIndex()
+        nzbs = nzbmonkey.process(store.values())
 
-        for nzb in index:
-            try:
-                nzb.verify()
-                good.append(nzb)
-            except (nzbmonkey.NZBVerificationException), e:
-                sys.stderr.write(str(e) + "\n")
+        (good, bad) = nzbs.split("complete", True)
+        del nzbs
 
-        del index
+        for nzb in bad:
+            sys.stdout.write("skipping (incomplete): %s\n" % nzb.subject)
+        del bad
 
         for nzb in good:
-            print nzb.name
-
-        for nzb in good:
-            with file("%s/%s.nzb" % (dest_dir, nzb.name), "w") as fp:
-                print "writing %s" % (fp.name)
+            with file(os.path.join(dest_dir, nzb.nzb_filename), "w") as fp:
+                print "adding: %s (%s)" % (nzb.name, nzb.nzb_filename)
                 fp.write(nzb.xml())
 
 
