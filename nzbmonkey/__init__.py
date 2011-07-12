@@ -35,6 +35,24 @@ class ObjectInterpolator(object):
         return self._MODIFIERS[modifier](str(getattr(self._obj, key)))
 
 
+class NZBChecker(object):
+
+    _RE_TYPE = type(re.compile(""))
+
+    def __init__(self, value):
+        # since __*__ methods are look up on the class/type, we need to create 
+        # a new type for every instance, and assign to the classes __call__
+        self.__class__ = type(self.__class__.__name__, (self.__class__,), {})
+
+
+        if isinstance(value, self._RE_TYPE):
+            self.__class__.__call__ = lambda self, x: value.search(x)
+        elif callable(value):
+            self.__class__.__call__ = lambda self, x: value(x)
+        else:
+            self.__class__.__call__ = lambda self, x: value == x
+
+
 class NZBVerificationException(Exception):
     pass
 
@@ -87,12 +105,21 @@ class NZBGenericCollection(collections.MutableSequence):
         return self._items.insert(index, obj)
 
     def find(self, key, value):
+        #t_start = time.time()
+        check = NZBChecker(value)
+        #rounds = 0
         for item in self:
-            if self.check(item, key, value):
+            x = getattr(item, key)
+            if check(x):
                 yield item
+            #rounds += 1
 
-    def check(self, item, key, value):
-        return getattr(item, key) == value
+        #print "check(%d in %.3fs): %s = %s" % (
+        #    rounds,
+        #    time.time() - t_start,
+        #    key,
+        #    value,
+        #)
 
     def findone(self, *args, **kwargs):
         for item in self.find(*args, **kwargs):
@@ -101,6 +128,7 @@ class NZBGenericCollection(collections.MutableSequence):
         return None
 
     def split(self, key, value, good = None, bad = None):
+        check = NZBChecker(value)
         if good is None:
             good = NZBIndex()
 
@@ -108,7 +136,7 @@ class NZBGenericCollection(collections.MutableSequence):
             bad = NZBIndex()
 
         for item in self:
-            if self.check(item, key, value):
+            if check(getattr(item, key)):
                 good.append(item)
             else:
                 bad.append(item)
@@ -370,6 +398,10 @@ class Loader(object):
         )["last_aid"] = int(last)
 
 
+# FIXME(mbra): we cannot modify this regex to allow anything besides dots as
+# seperators for name, opt and type, since we ".".join those three in the
+# NZBGenericCollection.filename property, but it whould be nice to be able
+# to catch broken names like "-sample-sample.avi" etc.
 _SUBJECT_RE = re.compile(
     r"""
         (?P<title>.*?)
