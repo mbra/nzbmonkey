@@ -220,21 +220,21 @@ class NZBSegment(NZBGenericCollection):
     _XML_TEMPLATE = '      <segment bytes=%(size:quote)s number=%(segment_number:quote)s>%(messageid:escape)s</segment>'
 
 
-_SUBJECT_RE = re.compile(
-    r"""
-        (?P<title>.*?)
-        [[(](?P<part_number>\d+)/(?P<part_count>\d+)[])]
-        \s+\-\s+(yEnc\s+)?
-        "
-            (?P<name>[^"]+?)
-            \.?(?P<opt>sample|part\d+|vol\d+|vol\d+\+\d+)?
-            \.(?P<type>nfo|avi|rar|nzb|par2|r\d+)
-        "
-        \s+(yEnc\s+)?
-        \((?P<segment_number>\d+)/(?P<segment_count>\d+)\)
-    """,
-    re.I|re.X,
-)
+    _SUBJECT_RE = re.compile(
+        r"""
+            (?P<title>.*?)
+            [[(](?P<part_number>\d+)/(?P<part_count>\d+)[])]
+            \s+\-\s+(yEnc\s+)?
+            "
+                (?P<name>[^"]+?)
+                \.?(?P<opt>sample|part\d+|vol\d+|vol\d+\+\d+)?
+                \.(?P<type>nfo|avi|rar|nzb|par2|r\d+)
+            "
+            \s+(yEnc\s+)?
+            \((?P<segment_number>\d+)/(?P<segment_count>\d+)\)
+        """,
+        re.I|re.X,
+    )
 
 
 class Loader(object):
