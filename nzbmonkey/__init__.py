@@ -429,6 +429,9 @@ class Loader(collections.MutableMapping):
                 fetch_delta,
                 int(last) - last_aid,
             )
+
+            if fetch_delta == 0:
+                continue
             # get article range
             (resp, msgs) = self._server.xover(str(start_aid), str(last))
 
