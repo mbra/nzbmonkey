@@ -222,7 +222,7 @@ class NZBGenericCollection(collections.MutableSequence):
             field = getattr(self, self._LEN_INDICATOR)
             if isinstance(field, type(None)):
                 return False
-            if int(len(self)) != int(field):
+            if int(len(self)) < int(field):
                 raise self._LEN_EXCEPTION(
                     self._LEN_EXCEPTION_STRING % ObjectInterpolator(self),
                 )
