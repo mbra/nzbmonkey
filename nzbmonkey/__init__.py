@@ -283,7 +283,7 @@ class NZBSegment(NZBGenericCollection):
     _XML_TEMPLATE = '      <segment bytes=%(size:quote)s number=%(segment_number:quote)s>%(messageid:escape)s</segment>'
 
 
-class Loader(object):
+class Loader(collections.MutableMapping):
 
     def __init__(
         self,
@@ -330,7 +330,6 @@ class Loader(object):
         return self._server
 
     def set_state(self, group, key, value):
-        #760418257 
         value = unicode(value)
 
         if value.isnumeric():
@@ -345,6 +344,24 @@ class Loader(object):
             group,
             dict()
         )[key] = value
+
+    def __getitem__(self, key):
+        return self._state[key]
+
+    def __setitem__(self, key, value):
+        self._state[key] = value
+
+    def __len__(self):
+        return len(self._state)
+
+    def __delitem__(self, key):
+        del self._state[key]
+
+    def __contains__(self, key):
+        return key in self._state
+
+    def __iter__(self):
+        return iter(self._state)
 
     def __del__(self):
         self._server.quit()
@@ -558,14 +575,14 @@ def process(article_provider, index = None):
             nzbfile.append(segment)
     except (SystemExit, KeyboardInterrupt), e:
         logging.info(
-            "stats: %s",
-            " ".join([":".join((x,str(y))) for x,y in _STATS.iteritems()])
+            "process - stats %s",
+            " ".join([" :".join((x,str(y))) for x,y in _STATS.iteritems()])
         )
         raise e
 
     logging.info(
-        "stats: %s",
-        " ".join([":".join((x,str(y))) for x,y in _STATS.iteritems()])
+        "process - stats %s",
+        " ".join([": ".join((x,str(y))) for x,y in _STATS.iteritems()])
     )
 
     return index

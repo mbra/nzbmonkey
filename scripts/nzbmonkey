@@ -14,6 +14,32 @@ import cPickle as _pickle
 
 import nzbmonkey
 
+
+class Script(object):
+
+    def __init__(self):
+        optparser = optparse.OptionParser()
+
+        optparser.add_option(
+            "-c",
+            "--config",
+            type = "string",
+            action = "append",
+            default = [],
+        )
+
+        (self.options, self.args) = optparser.parse_args()
+
+        # if no config file was specified, use defaults
+        config_files = self.options.config or [
+            "/etc/nzbmonkey.conf",
+            "~/.nzbmonkey.conf",
+        ]
+
+        self.config = ConfigParser.ConfigParser()
+        self.config.read([os.path.expanduser(x) for x in config_files])
+
+
 def pstream(filename):
     with file(filename, "rb") as fp:
         while True:
@@ -23,25 +49,37 @@ def pstream(filename):
                 break
 
 
-class Script(object):
+class NZBCli(Script):
 
-    def __init__(self, loader, options, args, config):
-        self._loader = loader
-        self._options = options
-        self._args = args
-        self._config = config
-        logging.basicConfig(level = logging.INFO)
+    _DEFAULT_COMMAND = "catchup"
 
     def run(self):
-        name = "catchup"
+        name = self._DEFAULT_COMMAND
 
         try:
-            name = self._args.pop(0)
+            name = self.args.pop(0)
         except IndexError:
             pass
 
         if hasattr(self, name):
-            getattr(self, name)(*self._args)
+            getattr(self, name)(*self.args)
+
+    def init(self):
+        logging.basicConfig(level = logging.INFO)
+        try:
+            self._loader = nzbmonkey.Loader(
+                host = self.config.get("nzbmonkey", "host"),
+                port = self.config.get("nzbmonkey", "port"),
+                user = self.config.get("nzbmonkey", "user"),
+                password = self.config.get("nzbmonkey", "password"),
+                state = self.config.get("nzbmonkey", "state"),
+                delta = self.config.get("nzbmonkey", "delta"),
+                max_delta = self.config.get("nzbmonkey", "max-delta"),
+                groups = re.split("\s+", self.config.get("nzbmonkey", "groups")),
+            )
+        except (ConfigParser.NoSectionError, ConfigParser.NoOptionError), e:
+            sys.stderr.write("A mandatory config option is missing: %s\n" % e.message)
+            sys.exit(1)
 
     def list(self, pattern):
         """
@@ -66,27 +104,7 @@ class Script(object):
         else:
             groups = groups.split(" ")
 
-        nzbs = nzbmonkey.process(
-            nzbmonkey.preprocess(self._loader.catchup(groups, delta))
-        )
-
-        (good, bad) = nzbs.split("complete", nzbmonkey.NZBCheckValue(True))
-        del nzbs
-
-        for nzb in bad:
-            sys.stdout.write(
-                "skipping (incomplete %s/%s): %s\n" % (
-                    nzb.length,
-                    nzb.parts,
-                    nzb.subject,
-                )
-            )
-        del bad
-
-        for nzb in good:
-            with file(os.path.join(self._config.get("nzbmonkey", "destination"), nzb.nzb_filename), "w") as fp:
-                print "adding: %s (%s)" % (nzb.name, nzb.nzb_filename)
-                fp.write(nzb.xml())
+        return self._process(self._loader.catchup(groups, delta))
 
     def download(self, filename, delta = 50000, *groups):
         """
@@ -106,31 +124,43 @@ class Script(object):
             create nzb files from the articles pickled in `filename`
             and write the resulting nzbs to `dest_dir`
         """
+        return self._process(pstream(filename))
 
+    def _process(self, data):
         t_start = time.time()
-        nzbs = nzbmonkey.process(nzbmonkey.preprocess(pstream(filename)))
-        logging.info("nzbs - processing took: %.3f", time.time() - t_start)
+        nzbs = self._loader.get("nzbs", nzbmonkey.NZBIndex())
+        logging.info("nzbcli - persisted: %d", len(nzbs))
+        nzbs = nzbmonkey.process(nzbmonkey.preprocess(data), index = nzbs)
+        logging.info("nzbcli - processing took: %.3f", time.time() - t_start)
 
         t_start = time.time()
         (good, bad) = nzbs.split("complete", nzbmonkey.NZBCheckValue(True))
-        logging.info("nzbs - splitting time: %.3f", time.time() - t_start)
+        logging.info("nzbcli - splitting time: %.3f", time.time() - t_start)
 
         del nzbs
 
-
         for nzb in bad:
-            sys.stdout.write(
-                "skipping (incomplete:%d): %s %s\n" % (
+            logging.info(
+                "nzbcli - skipping parts: %s have: %s group: %s name: %s" % (
                     len(nzb),
+                    nzb.parts,
+                    nzb.group,
                     nzb.name,
-                    nzb.subject,
                 )
             )
+
+        self._loader["nzbs"] = bad
         del bad
 
         for nzb in good:
-            with file(os.path.join(self._config.get("nzbmonkey", "destination"), nzb.nzb_filename), "w") as fp:
-                print "adding: %s (%s)" % (nzb.name, nzb.nzb_filename)
+            with file(os.path.join(self.config.get("nzbmonkey", "destination"), nzb.nzb_filename), "w") as fp:
+                logging.info(
+                    "nzbcli - new file: %s name: %s group: %s" % (
+                        nzb.nzb_filename,
+                        nzb.name,
+                        nzb.group,
+                    )
+                )
                 fp.write(nzb.xml())
 
     def test_subject(self, subject):
@@ -146,41 +176,8 @@ class Script(object):
 
 
 if __name__ == "__main__":
-    optparser = optparse.OptionParser()
-
-    optparser.add_option(
-        "-c",
-        "--config",
-        type = "string",
-        action = "append",
-        default = [],
-    )
-
-    (options, args) = optparser.parse_args()
-
-    # if no config file was specified, use defaults
-    if not options.config:
-        options.config =  ["/etc/nzbmonkey.conf", "~/.nzbmonkey.conf"]
-
-    config = ConfigParser.ConfigParser()
-    config.read([os.path.expanduser(x) for x in options.config])
-
-    try:
-        loader = nzbmonkey.Loader(
-            host = config.get("nzbmonkey", "host"),
-            port = config.get("nzbmonkey", "port"),
-            user = config.get("nzbmonkey", "user"),
-            password = config.get("nzbmonkey", "password"),
-            state = config.get("nzbmonkey", "state"),
-            delta = config.get("nzbmonkey", "delta"),
-            max_delta = config.get("nzbmonkey", "max-delta"),
-            groups = re.split("\s+", config.get("nzbmonkey", "groups")),
-        )
-    except (ConfigParser.NoSectionError, ConfigParser.NoOptionError), e:
-        sys.stderr.write("A mandatory config option is missing: %s\n" % e.message)
-        sys.exit(1)
-
-    script = Script(loader, options, args, config)
+    script = NZBCli()
+    script.init()
     script.run()
 
 
