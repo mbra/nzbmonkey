@@ -9,8 +9,9 @@ import pickle
 import atexit
 import nntplib
 import subprocess
-import shelve
 import xml.sax.saxutils
+
+import logging
 
 
 class ObjectInterpolator(object):
@@ -41,7 +42,7 @@ class NZBChecker(object):
 
     def __init__(self, value):
         # since __*__ methods are look up on the class/type, we need to create 
-        # a new type for every instance, and assign to the classes __call__
+        # a new type for every instance, and assign to the classes' __call__
         self.__class__ = type(self.__class__.__name__, (self.__class__,), {})
 
 
@@ -51,6 +52,21 @@ class NZBChecker(object):
             self.__class__.__call__ = lambda self, x: value(x)
         else:
             self.__class__.__call__ = lambda self, x: value == x
+
+
+def NZBCheckValue(value):
+    def check_value(x):
+        return value == x
+    return check_value
+
+def NZBCheckRe(value):
+    def check_re(x):
+        if value.search(x):
+            return True
+        else:
+            return False
+
+    return check_re
 
 
 class NZBVerificationException(Exception):
@@ -104,9 +120,9 @@ class NZBGenericCollection(collections.MutableSequence):
     def insert(self, index, obj):
         return self._items.insert(index, obj)
 
-    def find(self, key, value):
+    def find(self, key, check):
         #t_start = time.time()
-        check = NZBChecker(value)
+        #check = NZBChecker(value)
         #rounds = 0
         for item in self:
             x = getattr(item, key)
@@ -127,8 +143,8 @@ class NZBGenericCollection(collections.MutableSequence):
 
         return None
 
-    def split(self, key, value, good = None, bad = None):
-        check = NZBChecker(value)
+    def split(self, key, check, good = None, bad = None):
+        #check = NZBChecker(value)
         if good is None:
             good = NZBIndex()
 
@@ -155,9 +171,15 @@ class NZBGenericCollection(collections.MutableSequence):
 
     @property
     def timestamp(self):
-        return int(
-            time.mktime(time.strptime(self.date, "%d %b %Y %H:%M:%S %Z"))
-        )
+        for fmt in ["%d %b %Y %H:%M:%S %Z", "%d, %b %Y %H:%M:%S %Z"]:
+            try:
+                return int(
+                    time.mktime(time.strptime(self.date, fmt))
+                )
+            except ValueError, e:
+                pass
+        # fallback to now
+        return int(time.time())
 
     @property
     def items(self):
@@ -186,6 +208,10 @@ class NZBGenericCollection(collections.MutableSequence):
         except (AttributeError), e:
             return "<groups>my.default.group</group>"
 
+    @property
+    def nzb_filename(self):
+        return "%s.nzb" % self.name
+
     def xml(self):
         try:
             return self._XML_TEMPLATE % ObjectInterpolator(self)
@@ -194,17 +220,16 @@ class NZBGenericCollection(collections.MutableSequence):
 
     def verify(self):
         if self._LEN_INDICATOR:
-            if int(len(self)) != int(getattr(self, self._LEN_INDICATOR)):
+            field = getattr(self, self._LEN_INDICATOR)
+            if isinstance(field, type(None)):
+                return False
+            if int(len(self)) != int(field):
                 raise self._LEN_EXCEPTION(
                     self._LEN_EXCEPTION_STRING % ObjectInterpolator(self),
                 )
 
         for item in self:
             item.verify()
-
-    @property
-    def nzb_filename(self):
-        return "%s.nzb" % self.name
 
 
 class NZBIndex(NZBGenericCollection):
@@ -228,6 +253,14 @@ class NZB(NZBGenericCollection):
     _LEN_INDICATOR = "part_count"
     _LEN_EXCEPTION_STRING = "Files missing in '%(subject)s', is: %(length)s should be: %(part_count)s"
     _LEN_EXCEPTION = NZBFileMissing
+
+    @property
+    def parts(self):
+        if self._LEN_INDICATOR:
+            return getattr(self, self._LEN_INDICATOR)
+
+        return None
+
 
 class NZBFile(NZBGenericCollection):
 
@@ -261,16 +294,16 @@ class Loader(object):
         password,
         state = "state.pickle",
         groups = None,
+        delta = 50000,
+        max_delta = 500000,
     ):
         self._host = host
         self._port = port
         self._user = user
         self._password = password
         self._state_file = state
-
-        self._tmpfile = "%s.yenc"
-        self._decoder = "yydecode"
-
+        self._delta = int(delta)
+        self._max_delta = int(max_delta)
 
         # all code should be able to work with an empty state dict
         self._state = dict()
@@ -320,22 +353,7 @@ class Loader(object):
     def store_pickled(self):
         pickle.dump(self._state, file(self._state_file, "wb"))
 
-    def fetch_body(self, aid):
-        try:
-            print("fetching body for aid %s" %(aid))
-            tmpfile = self._tmpfile % aid
-            (resp, number, daid, body) = self._server.body(aid, tmpfile)
-            output = subprocess.Popen(
-                [self._decoder, "--verbose", tmpfile],
-                stdout = subprocess.PIPE
-            ).communicate()[0]
-            os.unlink(tmpfile)
-            print output,
-        except nntplib.NNTPTemporaryError, e:
-            # ignore missing article
-            pass
-
-    def get_group_state(group, field, default):
+    def get_group_state(self, group, field, default):
         return self._state.get(
             "groups",
             dict(),
@@ -347,7 +365,7 @@ class Loader(object):
             str(default),
         )
 
-    def set_group_state(group, field, value):
+    def set_group_state(self, group, field, value):
         # store last seen aid
         self._state.setdefault(
             "groups",
@@ -357,45 +375,74 @@ class Loader(object):
             dict()
         )[field] = value
 
-    def catchup(self, group, aid_delta = 10000):
+    def catchup(self, groups = None, delta = None, persist = True):
 
-        # select group
-        resp, count, first, last, name = self._server.group(group)
+        if groups is None:
+            groups = self.groups
 
-        # get last fetched aid from pickle or use a default
-        start_aid = self._state.get(
-            "groups",
-            dict(),
-        ).get(
-            group,
-            dict(),
-        ).get(
-            "last_aid",
-            str(int(last) - aid_delta),
-        )
+        for group in groups:
+            t_start = time.time()
+            # select group
+            resp, count, first, last, name = self._server.group(group)
+            last = int(last)
 
-        print "xover group: %s start: %s end: %s delta: %s" % (
-            group,
-            start_aid,
-            last,
-            int(last) - int(start_aid),
-        )
-        # get article range
-        (resp, msgs) = self._server.xover(str(start_aid), last)
+            # get last fetched aid from pickle or use a default
+            last_aid = int(
+                self.get_group_state(group, "last_aid", 0)
+            )
 
-        # only use nzb posts via naive pattern match
-        for (aid, subject, poster, date, mid, references, size, lines) in msgs:
-            if ".nzb" in subject:
-                self.fetch_body(aid)
+            if not delta:
+                if last_aid == 0:
+                    logging.info(
+                        "catchup - group %s has unknown last article, using default delta: %d",
+                    )
+                    last_aid = last - self._delta
 
-        # store last seen aid
-        self._state.setdefault(
-            "groups",
-            dict()
-        ).setdefault(
-            group,
-            dict()
-        )["last_aid"] = int(last)
+                delta = min(last - last_aid, self._max_delta)
+            else:
+                delta = int(delta)
+
+            start_aid = str(last - int(delta))
+
+            logging.info(
+                "catchup - group: %s last: %s start: %s end: %s fetch-delta: %s real-delta: %s",
+                group,
+                last_aid,
+                start_aid,
+                last,
+                int(last) - int(start_aid),
+                int(last) - last_aid,
+            )
+            # get article range
+            (resp, msgs) = self._server.xover(str(start_aid), str(last))
+
+            # only use nzb posts via naive pattern match
+            articles = 0
+            for (aid, subject, poster, date, mid, references, size, lines) in msgs:
+                yield dict(
+                    aid = aid,
+                    subject = subject,
+                    poster = poster,
+                    date = date,
+                    mid = mid,
+                    references = references,
+                    size = size,
+                    lines = lines,
+                    group = group,
+                )
+                articles += 1
+
+
+            # store last seen aid
+            if persist:
+                self.set_group_state(group, "last_aid", int(last))
+
+            logging.info(
+                "catchup - group: %s duration: %.3fs articles: %d",
+                group,
+                time.time() - t_start,
+                articles,
+            )
 
 
 # FIXME(mbra): we cannot modify this regex to allow anything besides dots as
@@ -403,14 +450,16 @@ class Loader(object):
 # NZBGenericCollection.filename property, but it whould be nice to be able
 # to catch broken names like "-sample-sample.avi" etc.
 _SUBJECT_RE = re.compile(
-    r"""
+    r"""^
         (?P<title>.*?)
-        [[(](?P<part_number>\d+)/(?P<part_count>\d+)[])]
-        \s+\-\s+(yEnc\s+)?
+        (?:\s*\-\s*)?
+        (:?[[(](?P<part_number>\d+)/(?P<part_count>\d+)[])])?
+        (yEnc)?
+        (?:\s*\-\s*)?
         "
             (?P<name>[^"]+?)
-            \.?(?P<opt>sample|part\d+|vol\d+|vol\d+\+\d+)?
-            \.(?P<type>nfo|avi|rar|nzb|par2|r\d+)
+            \.?(?P<opt>(?:xvid-|sample-|nfo.)sample|part\d+|vol\d+|vol\d+\+\d+)?
+            \.(?P<type>[^."]+)
         "
         \s+(yEnc\s+)?
         \((?P<segment_number>\d+)/(?P<segment_count>\d+)\)
@@ -418,35 +467,132 @@ _SUBJECT_RE = re.compile(
     re.I|re.X,
 )
 
+_PREFIX_RE = re.compile(
+    r"""
+        (?P<title>.*?)
+        (?:\s*\-\s*)?
+        (:?[[(](?P<part_number>\d+)/(?P<part_count>\d+)[])])?
+        (yEnc)?
+        (?:\s*\-\s*)?
+    """,
+    re.I|re.X,
+)
 
-def process(article_provider, index = None, regex = _SUBJECT_RE):
+_MAIN_RE = re.compile(
+    r"""
+            (?P<name>[^"]+?)
+            \.?(?P<opt>(?:xvid-|sample-|nfo.)sample|part\d+|vol\d+|vol\d+\+\d+)?
+            \.(?P<type>[^."]+)
+    """,
+    re.I|re.X,
+)
+
+
+_SUFFIX_RE = re.compile(
+    r"""
+        \s+(yEnc\s+)?
+        \((?P<segment_number>\d+)/(?P<segment_count>\d+)\)
+    """,
+    re.I|re.X,
+)
+
+
+stats = dict(
+    total = 0,
+    discarded = 0,
+    considered = 0,
+    nzbs = 0,
+    nzbfiles = 0,
+    segments = 0,
+    name_misses = 0,
+    title_misses = 0,
+)
+
+
+def preprocess(article_provider, regex = _SUBJECT_RE):
+
+    logging.info("preprocessing articles")
+    for data in article_provider:
+        stats["total"] += 1
+        m = regex.match(data["subject"])
+
+        if not m:
+            logging.debug("process - discard: %s", data["subject"])
+            stats["discarded"] += 1
+            continue
+
+        logging.debug("process - consider: %s",  data["subject"])
+        stats["considered"] += 1
+        data.update(m.groupdict())
+        yield data
+
+
+def process(article_provider, index = None):
     if index is None:
         index = NZBIndex()
 
-    for data in article_provider:
-        nzb = None
-        nzbfile = None
-        m = regex.search(data["subject"])
+    logging.info("processing articles")
+    try:
+        for data in article_provider:
+            nzb = None
+            nzbfile = None
 
-        if not m:
-            continue
+            segment = NZBSegment(**data)
+            stats["segments"] += 1
 
-        data.update(m.groupdict())
-        segment = NZBSegment(**data)
 
-        nzb = index.findone("name", segment.name)
+            #logging.debug("process - new segment: %s", segment.subject)
+            nzb = index.findone(
+                "name",
+                NZBCheckValue(segment.name),
+            )
 
-        if not nzb:
-            nzb = NZB(**data)
-            index.append(nzb)
+            if not nzb:
+                logging.debug(
+                    "process - could not find a match with name: %s, checking for title: %s",
+                    segment.name,
+                    segment.title,
+                )
+                stats["name_misses"] += 1
+                nzb = index.findone(
+                    "title",
+                    NZBCheckValue(segment.title),
+                )
+                if nzb:
+                    logging.debug("process - found nzb: %s", nzb.subject)
 
-        nzbfile = nzb.findone("filename", segment.filename)
+            if not nzb:
+                nzb = NZB(**data)
+                logging.debug(
+                    "process - new nzb: %s subject: %s",
+                    nzb.name,
+                    nzb.subject,
+                )
+                stats["title_misses"] += 1
+                stats["nzbs"] += 1
+                index.append(nzb)
 
-        if not nzbfile:
-            nzbfile = NZBFile(**data)
-            nzb.append(nzbfile)
+            nzbfile = nzb.findone(
+                "filename",
+                NZBCheckValue(segment.filename),
+            )
 
-        nzbfile.append(segment)
+            if not nzbfile:
+                nzbfile = NZBFile(**data)
+                logging.debug(
+                    "process - new nzbfile: %s subject: %s",
+                    nzbfile.filename,
+                    nzbfile.subject,
+                )
+                stats["nzbfiles"] += 1
+                nzb.append(nzbfile)
+
+            nzbfile.append(segment)
+    except (SystemExit, KeyboardInterrupt), e:
+        logging.info("stats: %s", " ".join([":".join((x,str(y))) for x,y in stats.iteritems()]))
+        raise e
+
+    logging.info("stats: %s", " ".join([":".join((x,str(y))) for x,y in stats.iteritems()]))
 
     return index
 

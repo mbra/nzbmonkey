@@ -1,33 +1,47 @@
 #!/usr/bin/env python
 
+import gc
 import os
 import re
 import sys
-import shelve
+import time
+import pprint
+import logging
 import optparse
 import ConfigParser
 
+import cPickle as _pickle
+
 import nzbmonkey
 
-class Commands(object):
+def pstream(filename):
+    with file(filename, "rb") as fp:
+        while True:
+            try:
+                yield _pickle.load(fp)
+            except EOFError:
+                break
 
-    def __init__(self, loader):
+
+class Script(object):
+
+    def __init__(self, loader, options, args, config):
         self._loader = loader
+        self._options = options
+        self._args = args
+        self._config = config
+        logging.basicConfig(level = logging.INFO)
 
-    def do(self, name, args):
-        """
-            execute the given action
-        """
+    def run(self):
+        name = "catchup"
+
+        try:
+            name = self._args.pop(0)
+        except IndexError:
+            pass
+
         if hasattr(self, name):
-            getattr(self, name)(*args)
-
-    def catchup(self, group = None, delta = 400000):
-        """
-            catchup with the given `group` or all groups specified in the
-            config file, if no history exists for a grep, `delta` is used
-        """
-        for group in self._loader.groups:
-            loader.catchup(group, int(delta))
+            getattr(self, name)(*self._args)
 
     def list(self, pattern):
         """
@@ -37,62 +51,98 @@ class Commands(object):
         for name, title in descs:
             print "%s - %s" % (name, title)
 
-    def download(self, group, filename, delta = 1000):
+    def catchup(self, groups = "", delta = None):
         """
-            fetch `delta` articles from `group` and persist them into
-            `filename` with the shelve module
+            create nzb files from the articles of the given groups, or all
+            configure groups if none are specified. you max specify your own
+            delta if the default delta does not suit you, or if you want to
+            fetch more then just the new articles (since the last run)
+            all generated nzbs are written to the destination directory
         """
-        resp, count, first, last, name = self._loader.server.group(group)
 
-        s = shelve.open(filename)
-        start_aid = int(last) - int(delta)
-        # get last fetched aid from pickle or use a default
-        print "xover group: %s start: %s end: %s delta: %s" % (
-            group,
-            start_aid,
-            last,
-            int(last) - int(start_aid),
+        groups = groups.strip()
+        if not groups:
+            groups = self._loader.groups
+        else:
+            groups = groups.split(" ")
+
+        nzbs = nzbmonkey.process(
+            nzbmonkey.preprocess(self._loader.catchup(groups, delta))
         )
-        # get article range
-        (resp, msgs) = self._loader.server.xover(str(start_aid), last)
 
-        # only use nzb posts via naive pattern match
-        for (aid, subject, poster, date, mid, references, size, lines) in msgs:
-            s[aid] = dict(
-                aid = aid,
-                subject = subject,
-                poster = poster,
-                date = date,
-                mid = mid,
-                references = references,
-                size = size,
-                lines = lines,
-                group = group,
+        (good, bad) = nzbs.split("complete", nzbmonkey.NZBCheckValue(True))
+        del nzbs
+
+        for nzb in bad:
+            sys.stdout.write(
+                "skipping (incomplete %s/%s): %s\n" % (
+                    nzb.length,
+                    nzb.parts,
+                    nzb.subject,
+                )
             )
+        del bad
 
-        s.close()
+        for nzb in good:
+            with file(os.path.join(self._config.get("nzbmonkey", "destination"), nzb.nzb_filename), "w") as fp:
+                print "adding: %s (%s)" % (nzb.name, nzb.nzb_filename)
+                fp.write(nzb.xml())
 
-    def nzbs(self, filename, dest_dir):
+    def download(self, filename, delta = 50000, *groups):
         """
             create nzb files from the articles shelved in `filename`
             and write the resulting nzbs to `dest_dir`
         """
-        store = shelve.open(filename)
 
-        nzbs = nzbmonkey.process(store.values())
+        if not groups or not groups[0]:
+            groups = self._loader.groups
 
-        (good, bad) = nzbs.split("complete", True)
+        with file(filename, "wb") as fp:
+            for data in self._loader.catchup(groups, delta, persist = False):
+                _pickle.dump(data, fp, _pickle.HIGHEST_PROTOCOL)
+
+    def nzbs(self, filename):
+        """
+            create nzb files from the articles pickled in `filename`
+            and write the resulting nzbs to `dest_dir`
+        """
+
+        t_start = time.time()
+        nzbs = nzbmonkey.process(nzbmonkey.preprocess(pstream(filename)))
+        logging.info("nzbs - processing took: %.3f", time.time() - t_start)
+
+        t_start = time.time()
+        (good, bad) = nzbs.split("complete", nzbmonkey.NZBCheckValue(True))
+        logging.info("nzbs - splitting time: %.3f", time.time() - t_start)
+
         del nzbs
 
+
         for nzb in bad:
-            sys.stdout.write("skipping (incomplete): %s\n" % nzb.subject)
+            sys.stdout.write(
+                "skipping (incomplete:%d): %s %s\n" % (
+                    len(nzb),
+                    nzb.name,
+                    nzb.subject,
+                )
+            )
         del bad
 
         for nzb in good:
-            with file(os.path.join(dest_dir, nzb.nzb_filename), "w") as fp:
+            with file(os.path.join(self._config.get("nzbmonkey", "destination"), nzb.nzb_filename), "w") as fp:
                 print "adding: %s (%s)" % (nzb.name, nzb.nzb_filename)
                 fp.write(nzb.xml())
 
+    def test_subject(self, subject):
+        index = nzbmonkey.process([dict(subject = subject)])
+
+        for item in index:
+            pprint.pprint(vars(item))
+
+    def test_subjects(self, filename):
+        pprint.pprint(list(nzbmonkey.preprocess(
+            [dict(subject = x) for x in file(filename).readlines()]
+        )))
 
 
 if __name__ == "__main__":
@@ -122,19 +172,15 @@ if __name__ == "__main__":
             user = config.get("nzbmonkey", "user"),
             password = config.get("nzbmonkey", "password"),
             state = config.get("nzbmonkey", "state"),
+            delta = config.get("nzbmonkey", "delta"),
+            max_delta = config.get("nzbmonkey", "max-delta"),
             groups = re.split("\s+", config.get("nzbmonkey", "groups")),
         )
     except (ConfigParser.NoSectionError, ConfigParser.NoOptionError), e:
         sys.stderr.write("A mandatory config option is missing: %s\n" % e.message)
         sys.exit(1)
 
-    commands = Commands(loader)
+    script = Script(loader, options, args, config)
+    script.run()
 
-    command = "catchup"
 
-    try:
-        command = args.pop(0)
-    except IndexError:
-        pass
-
-    commands.do(command, args)
