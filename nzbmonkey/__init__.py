@@ -55,12 +55,13 @@ class NZBChecker(object):
 
 
 def NZBCheckValue(value):
-    def check_value(x):
+    def check_value(x, value = value):
         return value == x
     return check_value
 
+
 def NZBCheckRe(value):
-    def check_re(x):
+    def check_re(x, value = value):
         if value.search(x):
             return True
         else:
@@ -120,13 +121,15 @@ class NZBGenericCollection(collections.MutableSequence):
     def insert(self, index, obj):
         return self._items.insert(index, obj)
 
+    def __iter__(self):
+        return iter(self._items)
+
     def find(self, key, check):
         #t_start = time.time()
         #check = NZBChecker(value)
         #rounds = 0
         for item in self:
-            x = getattr(item, key)
-            if check(x):
+            if check(getattr(item, key)):
                 yield item
             #rounds += 1
 
@@ -188,10 +191,6 @@ class NZBGenericCollection(collections.MutableSequence):
     @property
     def escaped_subject(self):
         return self.subject
-
-    @property
-    def filename(self):
-        return ".".join(filter(None, [self.name, self.opt, self.type]))
 
     @property
     def length(self):
@@ -398,11 +397,11 @@ class Loader(object):
                     )
                     last_aid = last - self._delta
 
-                delta = min(last - last_aid, self._max_delta)
+                fetch_delta = min(last - last_aid, self._max_delta)
             else:
-                delta = int(delta)
+                fetch_delta = int(delta)
 
-            start_aid = str(last - int(delta))
+            start_aid = str(last - int(fetch_delta))
 
             logging.info(
                 "catchup - group: %s last: %s start: %s end: %s fetch-delta: %s real-delta: %s",
@@ -410,7 +409,7 @@ class Loader(object):
                 last_aid,
                 start_aid,
                 last,
-                int(last) - int(start_aid),
+                fetch_delta,
                 int(last) - last_aid,
             )
             # get article range
@@ -445,10 +444,6 @@ class Loader(object):
             )
 
 
-# FIXME(mbra): we cannot modify this regex to allow anything besides dots as
-# seperators for name, opt and type, since we ".".join those three in the
-# NZBGenericCollection.filename property, but it whould be nice to be able
-# to catch broken names like "-sample-sample.avi" etc.
 _SUBJECT_RE = re.compile(
     r"""^
         (?P<title>.*?)
@@ -456,48 +451,18 @@ _SUBJECT_RE = re.compile(
         (:?[[(](?P<part_number>\d+)/(?P<part_count>\d+)[])])?
         (yEnc)?
         (?:\s*\-\s*)?
-        "
+        "(?P<filename>
             (?P<name>[^"]+?)
             \.?(?P<opt>(?:xvid-|sample-|nfo.)sample|part\d+|vol\d+|vol\d+\+\d+)?
             \.(?P<type>[^."]+)
-        "
+        )"
         \s+(yEnc\s+)?
         \((?P<segment_number>\d+)/(?P<segment_count>\d+)\)
     """,
     re.I|re.X,
 )
 
-_PREFIX_RE = re.compile(
-    r"""
-        (?P<title>.*?)
-        (?:\s*\-\s*)?
-        (:?[[(](?P<part_number>\d+)/(?P<part_count>\d+)[])])?
-        (yEnc)?
-        (?:\s*\-\s*)?
-    """,
-    re.I|re.X,
-)
-
-_MAIN_RE = re.compile(
-    r"""
-            (?P<name>[^"]+?)
-            \.?(?P<opt>(?:xvid-|sample-|nfo.)sample|part\d+|vol\d+|vol\d+\+\d+)?
-            \.(?P<type>[^."]+)
-    """,
-    re.I|re.X,
-)
-
-
-_SUFFIX_RE = re.compile(
-    r"""
-        \s+(yEnc\s+)?
-        \((?P<segment_number>\d+)/(?P<segment_count>\d+)\)
-    """,
-    re.I|re.X,
-)
-
-
-stats = dict(
+_STATS = dict(
     total = 0,
     discarded = 0,
     considered = 0,
@@ -513,16 +478,16 @@ def preprocess(article_provider, regex = _SUBJECT_RE):
 
     logging.info("preprocessing articles")
     for data in article_provider:
-        stats["total"] += 1
+        _STATS["total"] += 1
         m = regex.match(data["subject"])
 
         if not m:
             logging.debug("process - discard: %s", data["subject"])
-            stats["discarded"] += 1
+            _STATS["discarded"] += 1
             continue
 
         logging.debug("process - consider: %s",  data["subject"])
-        stats["considered"] += 1
+        _STATS["considered"] += 1
         data.update(m.groupdict())
         yield data
 
@@ -538,7 +503,7 @@ def process(article_provider, index = None):
             nzbfile = None
 
             segment = NZBSegment(**data)
-            stats["segments"] += 1
+            _STATS["segments"] += 1
 
 
             #logging.debug("process - new segment: %s", segment.subject)
@@ -553,7 +518,7 @@ def process(article_provider, index = None):
                     segment.name,
                     segment.title,
                 )
-                stats["name_misses"] += 1
+                _STATS["name_misses"] += 1
                 nzb = index.findone(
                     "title",
                     NZBCheckValue(segment.title),
@@ -561,6 +526,7 @@ def process(article_provider, index = None):
                 if nzb:
                     logging.debug("process - found nzb: %s", nzb.subject)
 
+            fresh = False
             if not nzb:
                 nzb = NZB(**data)
                 logging.debug(
@@ -568,14 +534,16 @@ def process(article_provider, index = None):
                     nzb.name,
                     nzb.subject,
                 )
-                stats["title_misses"] += 1
-                stats["nzbs"] += 1
+                _STATS["title_misses"] += 1
+                _STATS["nzbs"] += 1
                 index.append(nzb)
+                fresh = True
 
-            nzbfile = nzb.findone(
-                "filename",
-                NZBCheckValue(segment.filename),
-            )
+            if not fresh:
+                nzbfile = nzb.findone(
+                    "filename",
+                    NZBCheckValue(segment.filename),
+                )
 
             if not nzbfile:
                 nzbfile = NZBFile(**data)
@@ -584,15 +552,21 @@ def process(article_provider, index = None):
                     nzbfile.filename,
                     nzbfile.subject,
                 )
-                stats["nzbfiles"] += 1
+                _STATS["nzbfiles"] += 1
                 nzb.append(nzbfile)
 
             nzbfile.append(segment)
     except (SystemExit, KeyboardInterrupt), e:
-        logging.info("stats: %s", " ".join([":".join((x,str(y))) for x,y in stats.iteritems()]))
+        logging.info(
+            "stats: %s",
+            " ".join([":".join((x,str(y))) for x,y in _STATS.iteritems()])
+        )
         raise e
 
-    logging.info("stats: %s", " ".join([":".join((x,str(y))) for x,y in stats.iteritems()]))
+    logging.info(
+        "stats: %s",
+        " ".join([":".join((x,str(y))) for x,y in _STATS.iteritems()])
+    )
 
     return index
 
