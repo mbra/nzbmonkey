@@ -135,13 +135,13 @@ class NZBCli(Script):
 
         t_start = time.time()
         (good, bad) = nzbs.split("complete", nzbmonkey.NZBCheckValue(True))
-        logging.info("nzbcli - splitting time: %.3f", time.time() - t_start)
+        logging.info("nzbcli - splitting took: %.3f", time.time() - t_start)
 
         del nzbs
 
         for nzb in bad:
             logging.info(
-                "nzbcli - skipping parts: %s have: %s group: %s name: %s" % (
+                "nzbcli - skipping parts: %s of: %s group: %s name: %s" % (
                     len(nzb),
                     nzb.parts,
                     nzb.group,
@@ -155,10 +155,11 @@ class NZBCli(Script):
         for nzb in good:
             with file(os.path.join(self.config.get("nzbmonkey", "destination"), nzb.nzb_filename), "w") as fp:
                 logging.info(
-                    "nzbcli - new file: %s name: %s group: %s" % (
-                        nzb.nzb_filename,
-                        nzb.name,
+                    "nzbcli - new parts: %s of: %s group: %s file: %s" % (
+                        len(nzb),
+                        nzb.parts,
                         nzb.group,
+                        nzb.nzb_filename,
                     )
                 )
                 fp.write(nzb.xml())
