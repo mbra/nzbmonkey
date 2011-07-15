@@ -430,8 +430,12 @@ class Loader(collections.MutableMapping):
                 int(last) - last_aid,
             )
 
-            if fetch_delta == 0:
+            # delta may be < 0 if we catchup in a very small interval and
+            # hit another usenet server in a loadbalanced setup that has
+            # not yet gotten all the articles our last server had
+            if fetch_delta <= 0:
                 continue
+
             # get article range
             (resp, msgs) = self._server.xover(str(start_aid), str(last))
 
