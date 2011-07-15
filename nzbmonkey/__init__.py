@@ -125,8 +125,6 @@ class NZBGenericCollection(collections.MutableSequence):
         return iter(self._items)
 
     def find(self, key, check):
-        #t_start = time.time()
-        #check = NZBChecker(value)
         #rounds = 0
         for item in self:
             if check(getattr(item, key)):
@@ -411,6 +409,8 @@ class Loader(collections.MutableMapping):
                 if last_aid == 0:
                     logging.info(
                         "catchup - group %s has unknown last article, using default delta: %d",
+                        group,
+                        self._delta,
                     )
                     last_aid = last - self._delta
 
