@@ -307,8 +307,6 @@ class Loader(collections.MutableMapping):
 
         self._groups = groups or []
 
-        atexit.register(self.store_pickled)
-
         if os.path.exists(self._state_file):
             self._state = pickle.load(file(self._state_file, "rb"))
 
@@ -364,7 +362,7 @@ class Loader(collections.MutableMapping):
     def __del__(self):
         self._server.quit()
 
-    def store_pickled(self):
+    def persist(self):
         pickle.dump(self._state, file(self._state_file, "wb"))
 
     def get_group_state(self, group, field, default):

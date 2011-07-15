@@ -64,6 +64,8 @@ class NZBCli(Script):
         if hasattr(self, name):
             getattr(self, name)(*self.args)
 
+        self._loader.persist()
+
     def init(self):
         logging.basicConfig(level = logging.INFO)
         try:
