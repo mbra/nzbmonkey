@@ -177,6 +177,40 @@ class NZBCli(Script):
             [dict(subject = x) for x in file(filename).readlines()]
         )))
 
+    def find(self, regex):
+        nzbs = list(
+            self._loader["nzbs"].find(
+                "subject",
+                nzbmonkey.NZBCheckRe(re.compile(regex)),
+            ),
+        )
+
+        skip = ["_items"]
+        for nzb in nzbs:
+            for key, value in vars(nzb).items():
+                if key in skip:
+                    continue
+                print "%s: %s" % (key, value)
+            print "length: %d" % len(nzb)
+            print
+
+            for nzbfile in nzb:
+                for key, value in vars(nzbfile).items():
+                    if key in skip:
+                        continue
+                    print "   %s: %s" % (key, value)
+
+                print "   length: %d" % len(nzbfile)
+                print
+
+                for segment in nzbfile:
+                    for key, value in vars(segment).items():
+                        if key in skip:
+                            continue
+                        print "      %s: %s" % (key, value)
+
+                    print
+
 
 if __name__ == "__main__":
     script = NZBCli()
