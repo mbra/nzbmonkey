@@ -2,9 +2,9 @@ Source: nzbmonkey
 Section: news
 Priority: extra
 Maintainer: Michael van Bracht <michael@wontfix.org>
-Build-Depends: debhelper (>= 7.0.50~), python (>= 2.5), python-support (>= 1), debhelper(>= 8)
+Build-Depends: python (>= 2.5), python-support (>= 1), debhelper(>= 8)
 Standards-Version: 3.9.1
-Homepage: http://wontfix.org/projects/nzbmonkey/
+Homepage: http://wontfix.org/redmine/projects/nzbmonkey
 Vcs-Git: git://github.com/mbra/nzbmonkey.git
 Vcs-Browser: https://github.com/mbra/nzbmonkey
 
